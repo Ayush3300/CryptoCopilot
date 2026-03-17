@@ -1,95 +1,59 @@
-# 🚀 CryptoCopilot - Your Agentic Web3 Companion
+# CryptoPilot AI
 
-**CryptoCopilot** is a next-generation decentralized finance (DeFi) dashboard that combines the power of AI with seamless blockchain integration. Built for traders and power users, it offers an agentic chat interface to manage your assets, monitor markets, and execute trades using natural language.
+CryptoPilot AI is a full-stack crypto SaaS platform with AI chat, verified trader signals, wallet integration, real-time Socket.io updates, and an immersive Three.js hero experience.
 
----
+## Stack
+- Frontend: React + TypeScript + Tailwind + Framer Motion + React Three Fiber
+- Backend: Node.js + Express (MVC) + Socket.io + JWT + Rate Limiting
+- Database: MongoDB (with demo fallback when DB is not configured)
+- Web3: Ethers.js + MetaMask login/connect
 
-## ✨ Key Features
+## Features Delivered
+- Futuristic landing page with interactive 3D globe, floating crypto coins, stars, and smooth motion.
+- Multi-theme UI (dark / light / neon).
+- JWT auth with login/signup + MetaMask login endpoint.
+- AI chatbot API with daily free prompt limit (3/day) and persisted history when MongoDB is available.
+- Crypto news feed with bullish/bearish tags.
+- Trader section with verified trader cards and real-time live trade notifications via Socket.io.
+- Wallet section for MetaMask connect + ETH balance.
+- Exchange section with live rate API (ready to plug external provider).
+- Profile page with subscription status and wallet details.
+- Rate-limited chat endpoint and input validation.
 
-### 🤖 AI Crypto Co-pilot
-*   **Natural Language Commands**: "Buy 0.1 BNB worth of USDT", "Show me the SOL chart", or "Send 0.05 ETH to Vitalik".
-*   **Context-Aware Analysis**: The AI knows your live wallet balance, recent transactions, and current market prices.
-*   **Intelligent Routing**: Automatically detects swap intents, fetches quotes from DEXs, and prepares transactions for your approval.
+## Project Structure
+- `src/` → frontend app
+- `server/src/` → backend MVC API
 
-### 💼 Multi-Chain Wallet Management
-*   **Unified Dashboard**: Support for Ethereum, BNB Smart Chain, Polygon, and Sepolia Testnet.
-*   **Real-time Balances**: Instantly tracks native tokens and supported ERC-20 assets (USDT, USDC, LINK).
-*   **Contact Book**: Save frequently used addresses by name for faster, human-readable transfers.
-
-### 🔄 Integrated DEX Trading (PancakeSwap)
-*   **Native Swaps**: Swap any supported tokens directly on the BNB Smart Chain using the PancakeSwap V2 Router.
-*   **Zero Fees**: No platform fees—only standard network gas and DEX provider fees apply.
-*   **Slippage Protection**: Intelligent quote management to ensure you get the best market rates.
-
-### 📈 Advanced Market Monitoring
-*   **Dynamic Watchlist**: Real-time data for the top 250+ cryptocurrencies via CoinGecko.
-*   **Search & Discover**: Find any coin instantly and add it to your personal favorites.
-*   **Professional Charts**: Fully integrated TradingView charts with:
-    *   Candlestick & Line views.
-    *   **Expandable Canvas** (400px to 600px).
-    *   **Drawing Suite**: Trendlines, Fibonacci, and patterns for deep technical analysis.
-    *   7-day Sparkline overviews for quick trend detection.
-
-### 📜 Transaction Intelligence
-*   **Live History**: Locally tracked history of all your sends, swaps, and receives.
-*   **Direct Explorer Links**: Click any transaction to view it live on Etherscan, BscScan, or Polygonscan.
-
----
-
-## 🛠️ Technology Stack
-
-*   **Frontend**: React 18 + TypeScript + Vite
-*   **Styling**: CSS Modules with Modern Glassmorphism & Dark Mode
-*   **Blockchain**: Ethers.js v6 (MetaMask / Trust Wallet / Web3 Injection)
-*   **AI Engine**: Groq LPU™ (LLaMA 3 / Mixtral) for instant responses
-*   **Data APIs**:
-    *   **CoinGecko**: Market prices and coin discovery
-    *   **TradingView**: Advanced charting library
-    *   **PancakeSwap V2**: On-chain swap routing
-
----
-
-## 🚀 Getting Started
-
-### 1. Prerequisites
-*   [Node.js](https://nodejs.org/) (v18 or higher)
-*   [MetaMask](https://metamask.io/) browser extension
-
-### 2. Installation
+## Environment
+### Frontend (`.env`)
+Use `.env.example`:
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/cryptocopilot.git
-
-# Navigate to project
-cd cryptocopilot
-
-# Install dependencies
-npm install
+VITE_API_URL=http://localhost:4000/api
+VITE_SOCKET_URL=http://localhost:4000
 ```
 
-### 3. API Setup
-To use the AI chat features, you will need a **Groq API Key**:
-1. Get a free key at [Groq Cloud Console](https://console.groq.com/).
-2. Open the app, click the **Settings** icon (bottom left).
-3. Paste your API key. (Key is stored securely in your browser's `localStorage`).
-
-### 4. Run Development Server
+### Backend (`server/.env`)
+Use `server/.env.example`:
 ```bash
+PORT=4000
+CLIENT_ORIGIN=http://localhost:5173
+JWT_SECRET=replace-with-strong-secret
+MONGO_URI=mongodb://localhost:27017/cryptopilot
+```
+
+## Run Locally
+```bash
+npm install
+npm --prefix server install
 npm run dev
 ```
 
----
+## Production Build
+```bash
+npm run build
+npm --prefix server run start
+```
 
-## 🛡️ Security & Privacy
-*   **Key Security**: Your Groq API key and Watchlist are stored strictly in your local browser storage.
-*   **Non-Custodial**: CryptoCopilot never asks for your private keys or seed phrase. All transactions are signed via your connected Web3 wallet (e.g., MetaMask).
-*   **CORS Protection**: Integrated local proxy to ensure secure data fetching from market providers.
-
----
-
-## 📄 License
-Distributed under the MIT License. See `LICENSE` for more information.
-
----
-
-*Designed and Built with ⚡ by Antigravity*
+## Notes
+- Without `MONGO_URI`, backend runs in demo mode with in-memory fallback.
+- Payment provider (Stripe/Razorpay), advanced portfolio analytics, and PWA can be integrated into this scaffold quickly.

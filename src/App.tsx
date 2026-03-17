@@ -1,487 +1,239 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
-import Sidebar from './components/Sidebar';
-import TopBar from './components/TopBar';
-import ChatPanel from './components/ChatPanel';
-import RightPanel from './components/RightPanel';
-import SignalFeed from './components/SignalFeed';
-import SettingsModal from './components/SettingsModal';
-import { useGroqChat } from './hooks/useGroqChat';
-import { useWallet } from './hooks/useWallet';
-import { useCryptoPrices, useCoinChart } from './hooks/useCrypto';
-import { useContacts } from './hooks/useContacts';
-import { usePancakeSwap, BNB_TOKENS } from './hooks/usePancakeSwap';
-import { useTransactionHistory } from './hooks/useTransactionHistory';
-import { useWatchlist } from './hooks/useWatchlist';
-import type { RightPanelView, SidebarFeature, TraderSignal, TransactionPreview, SwapPreview, CoinGeckoCoin } from './types';
+import { useEffect, useMemo, useState } from 'react';
 import { ethers } from 'ethers';
+import { apiFetch } from './lib/api';
+import { useTheme } from './context/ThemeContext';
 
-function App() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<'agent' | 'signals'>('agent');
-  const [rightPanelView, setRightPanelView] = useState<RightPanelView>('prices');
-  const [activeFeature, setActiveFeature] = useState<SidebarFeature | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('groq_api_key') || '');
-  const [activeCoin, setActiveCoin] = useState<CoinGeckoCoin | null>(null);
-  const [transactionPreview, setTransactionPreview] = useState<TransactionPreview | null>(null);
-  const [swapPreview, setSwapPreview] = useState<SwapPreview | null>(null);
-  
-  // Use ref to break circular dependency with useGroqChat
-  const addSystemMessageRef = useRef<((content: string) => void) | null>(null);
-  const addSystemMessageProxy = useCallback((content: string) => {
-    addSystemMessageRef.current?.(content);
-  }, []);
+type Tab = 'home' | 'auth' | 'chat' | 'news' | 'traders' | 'wallet' | 'exchange' | 'profile';
+type NewsItem = { id: string; title: string; tag: 'Bullish' | 'Bearish'; coin: string };
+type Trader = { id: string; name: string; winRate: number; pnl30d: number };
+type Signal = { traderName: string; pair: string; action: 'BUY' | 'SELL'; confidence: number };
 
-  const { wallet, connectWallet, switchNetwork, refreshBalances, getExplorerUrl, formatAddress } = useWallet();
-  const { contacts, addContact, removeContact } = useContacts();
-  const { history, saveTransaction } = useTransactionHistory();
-  const { getSwapQuote, approveToken } = usePancakeSwap();
-  const { allCoins, watchlistCoins, watchlistIds, loading: watchlistLoading, lastUpdated: watchlistLastUpdated, toggleWatchlist, isInWatchlist } = useWatchlist();
+const tabs: Tab[] = ['home', 'auth', 'chat', 'news', 'traders', 'wallet', 'exchange', 'profile'];
+const heroWords = ['AI Copilot', 'Trader Signals', 'Web3 Wallet', 'Smart Transfers', 'Live Insights'];
 
-  // Define action handler for the AI
-  const handleAIAction = useCallback(async (action: string, params: Record<string, string>) => {
-    if (action === 'SEND') {
-      const { amount, coin, address, name } = params;
-      if (amount && coin && address && name) {
-        const gasMap: Record<string, string> = {
-          'BNB Smart Chain': '< $0.05',
-          'Polygon Mainnet': '< $0.05',
-          'Ethereum Mainnet': '$2 - $10'
-        };
-        const estGas = gasMap[wallet.networkName || ''] || 'Low';
-
-        setTransactionPreview({
-          recipientName: name,
-          address,
-          amount,
-          coin: coin.toUpperCase(),
-          estimatedGas: estGas,
-          networkName: wallet.networkName || 'Unknown Network'
-        });
-        setRightPanelView('transaction');
-      }
-    } else if (action === 'SWAP') {
-      const { fromToken, toToken, amount } = params;
-      if (fromToken && toToken && amount && wallet.address) {
-        try {
-          const fromAddr = BNB_TOKENS[fromToken.toUpperCase()] || fromToken;
-          const toAddr = BNB_TOKENS[toToken.toUpperCase()] || toToken;
-          
-          addSystemMessageProxy(`🔍 Fetching PancakeSwap quote for **${amount} ${fromToken}**...`);
-
-          const decimals = 18; 
-          const amountWei = ethers.parseUnits(amount, decimals).toString();
-
-          const estimatedOutputWei = await getSwapQuote(fromAddr, toAddr, amountWei);
-          const estimatedOutput = ethers.formatUnits(estimatedOutputWei, decimals);
-          
-          setSwapPreview({
-            fromToken: fromToken.toUpperCase(),
-            fromTokenAddress: fromAddr,
-            fromAmount: amount,
-            toToken: toToken.toUpperCase(),
-            toTokenAddress: toAddr,
-            toAmount: estimatedOutput,
-            rate: `1 ${fromToken.toUpperCase()} = ${(parseFloat(estimatedOutput) / parseFloat(amount)).toFixed(6)} ${toToken.toUpperCase()}`,
-            estimatedGas: `< $0.15`, 
-            slippage: 1,
-            rawSwapData: { amountWei, estimatedOutputWei: estimatedOutputWei.toString() }
-          });
-          setRightPanelView('swap');
-          addSystemMessageProxy(`✅ Quote received! You'll get approx **${parseFloat(estimatedOutput).toFixed(4)} ${toToken.toUpperCase()}**. Review and confirm on the right.`);
-        } catch (err: any) {
-          addSystemMessageProxy(`❌ Swap Error: ${err.message}`);
-        }
-      }
-    } else if (action === 'WATCHLIST_ADD') {
-      const { coinId } = params;
-      if (coinId) {
-        toggleWatchlist(coinId);
-        addSystemMessageProxy(`✅ Added **${coinId}** to your watchlist.`);
-      }
-    } else if (action === 'WATCHLIST_REMOVE') {
-      const { coinId } = params;
-      if (coinId) {
-        toggleWatchlist(coinId);
-        addSystemMessageProxy(`🗑️ Removed **${coinId}** from your watchlist.`);
-      }
-    } else if (action === 'SHOW_CHART') {
-      const { coinId } = params;
-      if (coinId) {
-        const coin = allCoins.find(c => c.id === coinId || c.symbol === coinId.toLowerCase());
-        if (coin) {
-          setActiveCoin(coin);
-          setRightPanelView('coin-chart');
-          addSystemMessageProxy(`📈 Opening **${coin.name}** chart...`);
-        } else {
-          addSystemMessageProxy(`❌ Sorry, I couldn't find a chart for **${coinId}**.`);
-        }
-      }
-    } else if (action === 'NAVIGATE') {
-      const { view } = params;
-      if (view === 'watchlist') {
-        setRightPanelView('watchlist');
-        addSystemMessageProxy(`📋 Opening your watchlist.`);
-      }
-    }
-  }, [wallet.networkName, wallet.address, getSwapQuote, addSystemMessageProxy, toggleWatchlist, allCoins]);
-
-  const { messages, isLoading, sendMessage, addSystemMessage, clearMessages } = useGroqChat(apiKey, handleAIAction);
-  
-  useEffect(() => {
-    addSystemMessageRef.current = addSystemMessage;
-  }, [addSystemMessage]);
-
-  const { prices, isLoading: pricesLoading } = useCryptoPrices(['bitcoin', 'ethereum', 'solana', 'cardano', 'chainlink', 'binancecoin', 'matic-network', 'avalanche-2', 'tether', 'usd-coin']);
-  const { chartData, isLoading: chartLoading, coinName: chartCoinName } = useCoinChart(activeCoin?.id || null);
-
-  // Handle sidebar feature click → preset message + panel update
-  const handleFeatureClick = useCallback(
-    (feature: SidebarFeature, message: string) => {
-      setActiveFeature(feature);
-      setActiveTab('agent');
-
-      // Update right panel based on feature
-      if (feature === 'portfolio') {
-        setRightPanelView('portfolio');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
-      } else if (feature === 'wallet') {
-        setRightPanelView('contacts');
-        addSystemMessage("Here are your saved contacts. You can add someone by saying 'add [name] [wallet address]'.");
-      } else if (feature === 'watchlist') {
-        setRightPanelView('watchlist');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history, watchlist: watchlistIds });
-      } else if (feature === 'chart') {
-        const btc = allCoins.find(c => c.symbol === 'btc') || allCoins[0];
-        if (btc) setActiveCoin(btc);
-        setRightPanelView('coin-chart');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history, watchlist: watchlistIds });
-      } else if (feature === 'journal') {
-        setRightPanelView('history');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
-      } else {
-        setRightPanelView('prices');
-        sendMessage(message, { address: wallet.address, holdings: wallet.holdings, contacts, history });
-      }
-    },
-    [sendMessage, addSystemMessage, wallet.address, wallet.holdings, contacts, history, watchlistIds, allCoins]
-  );
-
-  const handleConfirmTransaction = useCallback(async () => {
-    const preview = transactionPreview;
-    if (!wallet.isConnected || !window.ethereum || !preview) {
-      addSystemMessage("Please connect your wallet first to confirm this transaction.");
-      return;
-    }
-    
-    let txHash = "";
-    try {
-      addSystemMessage(`⏳ Requesting signature for **${preview.amount} ${preview.coin}**...`);
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      
-      const transaction = {
-        to: preview.address,
-        value: ethers.parseEther(preview.amount)
-      };
-
-      const response = await signer.sendTransaction(transaction);
-      txHash = response.hash;
-      
-      addSystemMessageProxy(`📡 Transaction broadcasted! **Hash**: ${txHash.slice(0, 10)}... (Status: **Pending**)`);
-      
-      saveTransaction({
-        type: 'send',
-        fromToken: preview.coin,
-        fromAmount: preview.amount,
-        toAddress: preview.address,
-        contactName: preview.recipientName,
-        status: 'pending',
-        hash: txHash,
-        network: wallet.networkName || 'Ethereum Mainnet'
-      });
-
-      const { amount, coin, recipientName, address: toAddress } = preview;
-      setTransactionPreview(null);
-      
-      await response.wait();
-      addSystemMessageProxy(`✅ Transaction confirmed! You sent **${amount} ${coin}** to **${recipientName}**. [View on Explorer](${getExplorerUrl(txHash)})`);
-      
-      saveTransaction({
-        type: 'send',
-        fromToken: coin,
-        fromAmount: amount,
-        toAddress: toAddress,
-        contactName: recipientName,
-        status: 'success',
-        hash: txHash,
-        network: wallet.networkName || 'Ethereum Mainnet'
-      });
-
-      refreshBalances();
-
-    } catch (err: any) {
-      console.error('Transaction Error:', err);
-      addSystemMessage(`❌ Error: ${err.message || 'Transaction failed'}`);
-      
-      if (txHash && preview) {
-        saveTransaction({
-          type: 'send',
-          fromToken: preview.coin,
-          fromAmount: preview.amount,
-          toAddress: preview.address,
-          contactName: preview.recipientName,
-          status: 'failed',
-          hash: txHash,
-          network: wallet.networkName || 'Ethereum Mainnet'
-        });
-      }
-    }
-  }, [wallet.isConnected, wallet.networkName, transactionPreview, addSystemMessage, addSystemMessageProxy, getExplorerUrl, refreshBalances, saveTransaction]);
-
-  const handleConfirmSwap = useCallback(async () => {
-    if (!wallet.isConnected || !window.ethereum || !swapPreview) {
-      addSystemMessageProxy("Please connect your wallet first.");
-      return;
-    }
-
-    try {
-      addSystemMessageProxy(`⏳ Preparing swap of **${swapPreview.fromAmount} ${swapPreview.fromToken}** for **${swapPreview.toToken}**...`);
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-
-      // Check for ETH (native)
-      const isFromEth = swapPreview.fromToken === 'BNB'; 
-      const isToEth = swapPreview.toToken === 'BNB';
-
-      let tx: any;
-      const PANCAKESWAP_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
-      const ROUTER_ABI = [
-        "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)",
-        "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
-        "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
-      ];
-
-      const router = new ethers.Contract(PANCAKESWAP_ROUTER, ROUTER_ABI, signer);
-      const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 mins
-      const path = [swapPreview.fromTokenAddress, swapPreview.toTokenAddress];
-      const amountIn = swapPreview.rawSwapData.amountWei;
-      const minAmountOut = 0; // In production, use slippage
-
-      if (!isFromEth) {
-        addSystemMessageProxy(`🔐 Checking allowance for **${swapPreview.fromToken}**...`);
-        await approveToken(swapPreview.fromTokenAddress, amountIn);
-        addSystemMessageProxy(`✅ Token approved! Please sign the swap transaction...`);
-      }
-
-      if (isFromEth) {
-        tx = await router.swapExactETHForTokens(minAmountOut, path, wallet.address, deadline, { value: amountIn });
-      } else if (isToEth) {
-        tx = await router.swapExactTokensForETH(amountIn, minAmountOut, path, wallet.address, deadline);
-      } else {
-        tx = await router.swapExactTokensForTokens(amountIn, minAmountOut, path, wallet.address, deadline);
-      }
-
-      const txHash = tx.hash;
-      addSystemMessageProxy(`📡 Swap broadcasted! **Hash**: ${txHash.slice(0, 10)}... (Status: **Pending**)`);
-
-      saveTransaction({
-        type: 'swap',
-        fromToken: swapPreview.fromToken,
-        fromAmount: swapPreview.fromAmount,
-        toToken: swapPreview.toToken,
-        toAmount: swapPreview.toAmount,
-        status: 'pending',
-        hash: txHash,
-        network: 'BNB Smart Chain'
-      });
-
-      await tx.wait();
-      addSystemMessageProxy(`✅ Swap successful! You received **${parseFloat(swapPreview.toAmount).toFixed(4)} ${swapPreview.toToken}**. [View on Explorer](${getExplorerUrl(txHash)})`);
-      
-      saveTransaction({
-        type: 'swap',
-        fromToken: swapPreview.fromToken,
-        fromAmount: swapPreview.fromAmount,
-        toToken: swapPreview.toToken,
-        toAmount: swapPreview.toAmount,
-        status: 'success',
-        hash: txHash,
-        network: 'BNB Smart Chain'
-      });
-
-      setSwapPreview(null);
-      setRightPanelView('history');
-      refreshBalances();
-
-    } catch (err: any) {
-      console.error('Swap Error:', err);
-      addSystemMessageProxy(`❌ Swap failed: ${err.message}`);
-      
-      saveTransaction({
-        type: 'swap',
-        fromToken: swapPreview?.fromToken || '?',
-        fromAmount: swapPreview?.fromAmount || '0',
-        toToken: swapPreview?.toToken || '?',
-        toAmount: swapPreview?.toAmount || '0',
-        status: 'failed',
-        hash: '',
-        network: 'BNB Smart Chain'
-      });
-    }
-  }, [wallet.isConnected, wallet.address, swapPreview, addSystemMessageProxy, approveToken, getExplorerUrl, refreshBalances, saveTransaction]);
-
-  const handleSendMessage = useCallback(
-    (content: string) => {
-      // Intercept contacts commands
-      if (content.toLowerCase().startsWith('add ') && content.split(' ').length >= 3) {
-        const parts = content.split(' ');
-        const name = parts[1];
-        const addr = parts[2];
-        if (ethers.isAddress(addr)) {
-          addContact(name, addr);
-          addSystemMessage(`✅ Saved **${name}** as ${addr.slice(0, 6)}...${addr.slice(-4)}. You can now send funds to ${name} directly by name.`);
-          setRightPanelView('contacts');
-          return;
-        }
-      }
-
-      if (content.toLowerCase().startsWith('delete contact ')) {
-        const name = content.replace(/delete contact /i, '').trim();
-        if (contacts[name]) {
-          removeContact(name);
-          addSystemMessage(`🗑️ Removed **${name}** from your address book.`);
-          setRightPanelView('contacts');
-          return;
-        }
-      }
-
-      // Default AI message
-      sendMessage(content, { 
-        address: wallet.address, 
-        holdings: wallet.holdings, 
-        contacts, 
-        history, 
-        watchlist: watchlistIds 
-      });
-    },
-    [sendMessage, addContact, removeContact, contacts, wallet.address, wallet.holdings, history, watchlistIds]
-  );
-
-  const handleConnectWallet = useCallback(() => {
-    if (!wallet.isConnected) {
-      connectWallet();
-    } else {
-      setRightPanelView('portfolio');
-    }
-  }, [wallet.isConnected, connectWallet]);
-
-  const handleSaveSettings = (newKey: string) => {
-    setApiKey(newKey);
-    localStorage.setItem('groq_api_key', newKey);
-    if (newKey) {
-      addSystemMessageProxy('✅ API Key saved! I am now ready to chat.');
-      addSystemMessageProxy('How can I help you with your crypto journey today?');
-    }
-  };
-
-  const handleSignalClick = (signal: TraderSignal) => {
-    setActiveTab('agent');
-    sendMessage(`Analyze the ${signal.coin} ${signal.direction} signal from ${signal.name}. Is it a good entry?`, { 
-      address: wallet.address, 
-      holdings: wallet.holdings, 
-      contacts, 
-      history, 
-      watchlist: watchlistIds 
-    });
-  };
+export default function App() {
+  const [tab, setTab] = useState<Tab>('home');
+  const { theme, setTheme } = useTheme();
 
   return (
-    <div
-      style={{
-        height: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'var(--bg-main)',
-        color: 'var(--text-main)',
-        overflow: 'hidden',
-      }}
-    >
-      <TopBar
-        wallet={wallet}
-        prices={prices}
-        onConnectWallet={handleConnectWallet}
-        formatAddress={formatAddress}
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-      />
+    <main className="min-h-screen bg-[var(--bg)] text-[var(--text)] transition-colors duration-500">
+      <BackgroundOrbs />
+      <div className="relative z-10 mx-auto max-w-7xl px-4 py-6">
+        <header className="glass-nav mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl p-4">
+          <h1 className="brand-logo">CryptoPilot AI</h1>
+          <div className="flex flex-wrap gap-2 text-sm">
+            {tabs.map((item) => (
+              <button key={item} onClick={() => setTab(item)} className={`tab-btn ${tab === item ? 'tab-btn--active' : ''}`}>
+                {item}
+              </button>
+            ))}
+          </div>
+          <select value={theme} onChange={(e) => setTheme(e.target.value as 'dark' | 'light' | 'neon')} className="theme-select">
+            <option value="dark">dark</option>
+            <option value="light">light</option>
+            <option value="neon">neon</option>
+          </select>
+        </header>
 
-      {/* Main Layout */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Sidebar */}
-        <Sidebar
-          isOpen={sidebarOpen}
-          onToggle={() => setSidebarOpen((v) => !v)}
-          activeFeature={activeFeature}
-          onFeatureClick={handleFeatureClick}
-          onSettingsClick={() => setSettingsOpen(true)}
-        />
-
-        {/* Center Panel */}
-        {activeTab === 'agent' ? (
-          <ChatPanel
-            messages={messages}
-            isLoading={isLoading}
-            onSendMessage={handleSendMessage}
-            onClearChat={clearMessages}
-          />
-        ) : (
-          <SignalFeed onSignalClick={handleSignalClick} />
-        )}
-
-        {/* Right Panel */}
-        <RightPanel
-          view={rightPanelView}
-          prices={prices}
-          pricesLoading={pricesLoading}
-          chartData={chartData}
-          chartLoading={chartLoading}
-          chartCoinName={chartCoinName}
-          wallet={wallet}
-          transactionPreview={transactionPreview}
-          contacts={contacts}
-          onContactSendClick={(name) => handleSendMessage(`Send to ${name}`)}
-          onContactDeleteClick={(name) => handleSendMessage(`Delete contact ${name}`)}
-          onConfirmTransactionClick={handleConfirmTransaction}
-          onConfirmSwapClick={handleConfirmSwap}
-          swapPreview={swapPreview}
-          history={history}
-          onSwitchNetwork={switchNetwork}
-          allCoins={allCoins}
-          watchlistCoins={watchlistCoins}
-          onToggleWatchlist={toggleWatchlist}
-          isInWatchlist={isInWatchlist}
-          watchlistLoading={watchlistLoading}
-          watchlistLastUpdated={watchlistLastUpdated}
-          onCoinClick={(coin) => {
-            setActiveCoin(coin);
-            setRightPanelView('coin-chart');
-          }}
-          onBackToWatchlist={() => setRightPanelView('watchlist')}
-          activeCoin={activeCoin}
-        />
+        {tab === 'home' && <Home setTab={setTab} />}
+        {tab === 'auth' && <Auth />}
+        {tab === 'chat' && <Chatbot />}
+        {tab === 'news' && <News />}
+        {tab === 'traders' && <Traders />}
+        {tab === 'wallet' && <Wallet />}
+        {tab === 'exchange' && <Exchange />}
+        {tab === 'profile' && <Profile />}
       </div>
+    </main>
+  );
+}
 
-      {/* Settings Modal */}
-      {settingsOpen && (
-        <SettingsModal
-          apiKey={apiKey}
-          onSave={handleSaveSettings}
-          onClose={() => setSettingsOpen(false)}
-        />
-      )}
+function BackgroundOrbs() {
+  const orbs = useMemo(
+    () => Array.from({ length: 14 }, (_, i) => ({ id: i, left: `${Math.random() * 100}%`, delay: `${Math.random() * 8}s`, size: 80 + Math.random() * 150 })),
+    []
+  );
+
+  return (
+    <div className="pointer-events-none fixed inset-0 overflow-hidden">
+      {orbs.map((orb) => (
+        <span key={orb.id} className="orb" style={{ left: orb.left, width: orb.size, height: orb.size, animationDelay: orb.delay }} />
+      ))}
     </div>
   );
 }
 
-export default App;
+function Home({ setTab }: { setTab: (tab: Tab) => void }) {
+  const [wordIndex, setWordIndex] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => setWordIndex((i) => (i + 1) % heroWords.length), 1500);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <section className="hero-panel rounded-3xl p-10">
+      <div className="hero-grid">
+        <div>
+          <p className="status-pill">● Live market intelligence</p>
+          <h2 className="hero-title">The most attractive and professional crypto SaaS interface to ship and win.</h2>
+          <p className="hero-sub">Built with smooth transitions, premium glassmorphism, neon accents, and real product flows for trading, wallet, AI, and subscriptions.</p>
+          <p className="type-loop">Now focusing: <span>{heroWords[wordIndex]}</span></p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button className="btn" onClick={() => setTab('auth')}>Get Started</button>
+            <button className="btn-secondary" onClick={() => setTab('chat')}>Try AI Chat</button>
+          </div>
+        </div>
+        <div className="feature-wall">
+          {['AI Chatbot', 'Trader Signals', 'Crypto News', 'Wallet Integration', 'Exchange Rates', 'Profile + Subscription'].map((item) => (
+            <div key={item} className="feature-card">{item}</div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Auth() {
+  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [msg, setMsg] = useState('');
+
+  const submit = async () => {
+    try {
+      const path = mode === 'login' ? '/auth/login' : '/auth/signup';
+      const payload = mode === 'login' ? { email: form.email, password: form.password } : form;
+      const res = await apiFetch(path, { method: 'POST', body: JSON.stringify(payload) });
+      localStorage.setItem('cp_token', res.token);
+      setMsg('Authenticated successfully.');
+    } catch (e: any) {
+      setMsg(e.message);
+    }
+  };
+
+  const metaMaskLogin = async () => {
+    try {
+      const eth = (window as any).ethereum;
+      if (!eth) return setMsg('MetaMask not detected');
+      const [walletAddress] = await eth.request({ method: 'eth_requestAccounts' });
+      const res = await apiFetch('/auth/metamask', { method: 'POST', body: JSON.stringify({ walletAddress }) });
+      localStorage.setItem('cp_token', res.token);
+      setMsg('MetaMask login success');
+    } catch (e: any) {
+      setMsg(e.message);
+    }
+  };
+
+  return <div className="card space-y-2">{['name', 'email', 'password'].map((field) => (mode === 'signup' || field !== 'name') && <input key={field} className="input" type={field === 'password' ? 'password' : 'text'} placeholder={field} value={(form as any)[field]} onChange={(e)=>setForm((s)=>({ ...s, [field]: e.target.value }))} />)}<button className="btn" onClick={submit}>{mode}</button><button className="btn-secondary" onClick={()=>setMode(mode==='login'?'signup':'login')}>Switch to {mode==='login'?'signup':'login'}</button><button className="btn-secondary" onClick={metaMaskLogin}>MetaMask Login</button><p>{msg}</p></div>;
+}
+
+function Chatbot() {
+  const [input, setInput] = useState('');
+  const [messages, setMessages] = useState<string[]>([]);
+  const [quickCommand, setQuickCommand] = useState('Send 0.01 ETH to Rahul');
+
+  const send = async () => {
+    try {
+      const data = await apiFetch('/chat', { method: 'POST', body: JSON.stringify({ message: input || quickCommand }) });
+      setMessages((m) => [...m, `You: ${input || quickCommand}`, `AI: ${data.response} (${data.promptsRemaining} left)`]);
+      setInput('');
+    } catch (e: any) {
+      setMessages((m) => [...m, `Error: ${e.message}`]);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="h-72 space-y-2 overflow-auto">
+        {messages.map((m, i) => (
+          <div key={i} className="rounded bg-black/40 p-2 text-sm">{m}</div>
+        ))}
+      </div>
+      <div className="mt-3 flex gap-2">
+        <input className="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask crypto question or command" />
+        <button className="btn" onClick={send}>Send</button>
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-xs text-cyan-200/80">Smart transfer:</span>
+        <button className="chip" onClick={() => setQuickCommand('Send 0.01 ETH to Rahul')}>Rahul</button>
+        <button className="chip" onClick={() => setQuickCommand('Send 0.05 ETH to Team Wallet')}>Team Wallet</button>
+      </div>
+    </div>
+  );
+}
+
+function News() {
+  const [news, setNews] = useState<NewsItem[]>([]);
+  const [coinFilter, setCoinFilter] = useState('ALL');
+
+  useEffect(() => {
+    const query = coinFilter === 'ALL' ? '/news' : `/news?coin=${coinFilter}`;
+    apiFetch(query).then((d) => setNews(d.items));
+  }, [coinFilter]);
+
+  return (
+    <>
+      <div className="mb-3 flex gap-2">
+        {['ALL', 'BTC', 'ETH', 'SOL'].map((coin) => (
+          <button key={coin} className={`chip ${coinFilter === coin ? 'chip--active' : ''}`} onClick={() => setCoinFilter(coin)}>{coin}</button>
+        ))}
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        {news.map((n) => (
+          <div key={n.id} className="card">
+            <p className="font-semibold">{n.title}</p>
+            <span className={`mt-2 inline-block text-xs ${n.tag === 'Bullish' ? 'text-emerald-300' : 'text-rose-300'}`}>{n.coin} • {n.tag}</span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function Traders() {
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [traders, setTraders] = useState<Trader[]>([]);
+
+  useEffect(() => {
+    apiFetch('/traders').then((d) => setTraders(d.traders));
+    const stream = new EventSource(`${import.meta.env.VITE_API_URL || 'http://localhost:4000/api'}/traders/stream`);
+    stream.onmessage = (event) => setSignals((s) => [JSON.parse(event.data), ...s].slice(0, 10));
+    return () => stream.close();
+  }, []);
+
+  return <div className="grid gap-4 md:grid-cols-2"><div className="card"><h3 className="mb-2 font-semibold">Verified traders</h3>{traders.map((t)=><p key={t.id}>{t.name} • Win {t.winRate}% • 30d {t.pnl30d}%</p>)}</div><div className="card"><h3 className="mb-2 font-semibold">Live signal stream</h3>{signals.map((s,i)=><p key={i} className={s.action==='BUY' ? 'text-emerald-300' : 'text-rose-300'}>{s.traderName}: {s.action} {s.pair} ({s.confidence}%)</p>)}</div></div>;
+}
+
+function Wallet() {
+  const [address, setAddress] = useState('');
+  const [balance, setBalance] = useState('');
+
+  const connect = async () => {
+    const provider = new ethers.BrowserProvider((window as any).ethereum);
+    const signer = await provider.getSigner();
+    const addr = await signer.getAddress();
+    const b = await provider.getBalance(addr);
+    setAddress(addr);
+    setBalance(ethers.formatEther(b));
+  };
+
+  return <div className="card"><button className="btn" onClick={connect}>Connect MetaMask</button><p className="mt-3">Address: {address}</p><p>Balance: {balance} ETH</p></div>;
+}
+
+function Exchange() {
+  const [rates, setRates] = useState<Record<string, number>>({});
+  useEffect(() => {
+    apiFetch('/exchange/rates').then((d) => setRates(d.rates));
+  }, []);
+
+  return <div className="card space-y-2">{Object.entries(rates).map(([pair, rate]) => <div key={pair} className="flex justify-between"><span>{pair}</span><strong>{String(rate)}</strong></div>)}</div>;
+}
+
+function Profile() {
+  const [profile, setProfile] = useState<any>(null);
+  useEffect(() => {
+    apiFetch('/profile').then((d) => setProfile(d.profile)).catch(() => undefined);
+  }, []);
+
+  return <div className="card">{profile ? <><p>{profile.email}</p><p>Subscription: {profile.subscription}</p><p>Wallet: {profile.walletAddress || 'Not connected'}</p></> : 'Login to view profile'}</div>;
+}
